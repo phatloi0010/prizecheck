@@ -1028,20 +1028,17 @@ test("a new activation recovers while superseded format checks are still held", 
     }
   };
   page.on("response", recordWarmCost);
-  let warmupSucceeded = false;
   try {
     await page.goto(address);
     await warmed(page);
     await expect.poll(() => warmedCosts.size).toBe(2);
-    warmupSucceeded = true;
   } finally {
     page.off("response", recordWarmCost);
-    // Detaching bounds the drain, including responses observed after the threshold but before detach.
-    const results = (await Promise.all(pendingWarmCosts)).flat();
-    const failure = results.find((result) => result.status === "rejected");
-    // Preserve a warm-up failure as the primary error while still draining every observed response.
-    if (warmupSucceeded && failure) throw failure.reason;
   }
+  // Drain only after success so a stalled response cannot delay the original warm-up error.
+  const results = (await Promise.all(pendingWarmCosts)).flat();
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) throw failure.reason;
   await tabs(page).getByRole("button", { name: "Decks", exact: true }).click();
   await tabs(page)
     .getByRole("button", { name: "Collection", exact: true })
