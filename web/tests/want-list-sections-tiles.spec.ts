@@ -358,9 +358,9 @@ for (const height of [800, 600]) {
     );
     const seen = new Set<number>();
     const seenUncovered = new Set<number>();
-    const collectRows = (step: number) =>
+    const collectRows = (step: number, diagnosticOnly: boolean) =>
       rows.evaluateAll(
-        async (elements, { step, earlier }) => {
+        async (elements, { step, earlier, diagnosticOnly }) => {
           // Record the ratio as diagnostic data; the live Playwright matcher
           // below retains its own retries and numerical tolerance.
           const ratios = await new Promise<Map<Element, number>>((resolve) => {
@@ -438,6 +438,7 @@ for (const height of [800, 600]) {
             return {
               index,
               step,
+              diagnosticOnly,
               fullyVisible,
               ratio: ratios.get(element),
               uncovered: points.every((point) => point.uncovered),
@@ -459,7 +460,7 @@ for (const height of [800, 600]) {
             };
           });
         },
-        { step, earlier: [...seenUncovered] }
+        { step, earlier: [...seenUncovered], diagnosticOnly }
       );
     const samples: Awaited<ReturnType<typeof collectRows>> = [];
     let lastAttemptedWheelStep = -1;
@@ -485,12 +486,14 @@ for (const height of [800, 600]) {
     };
     const collectVisibleRows = async (step: number) => {
       phase = "row collection";
-      const current = await collectRows(step);
+      const current = await collectRows(step, failures.length > 0);
       samples.push(...current);
       for (const sample of current) {
         if (!sample.fullyVisible) continue;
         seen.add(sample.index);
         if (sample.uncovered) seenUncovered.add(sample.index);
+        // After the first verdict failure, retain only diagnostic samples.
+        if (failures.length > 0) continue;
         // Preserve failures at this position, even if the row is readable later.
         phase = "row occlusion assertion";
         try {
@@ -501,6 +504,7 @@ for (const height of [800, 600]) {
         } catch (error) {
           rememberFailure(error, sample);
         }
+        if (failures.length > 0) continue;
         phase = "row viewport assertion";
         try {
           await expect(rows.nth(sample.index)).toBeInViewport({ ratio: 1 });
@@ -524,32 +528,48 @@ for (const height of [800, 600]) {
         const before = await position();
         phase = "wheel dispatch";
         await page.mouse.wheel(0, 120);
-        // Wheel dispatch is asynchronous: wait for movement or the page boundary.
-        phase = "wheel movement poll";
-        await expect
-          .poll(async () => {
-            const after = await position();
-            return after.y > before.y || after.atEnd;
-          })
-          .toBe(true);
-        // Movement alone is insufficient: sample only after two consecutive
-        // animation-frame intervals have unchanged scrollY, with a finite budget.
-        phase = "wheel settling";
-        const settled = await page.evaluate(async () => {
-          let previous = scrollY;
-          let stableFrames = 0;
-          for (let frame = 0; frame < 120; frame++) {
-            await new Promise<void>((resolve) =>
-              requestAnimationFrame(() => resolve())
-            );
-            const current = scrollY;
-            stableFrames = current === previous ? stableFrames + 1 : 0;
-            if (stableFrames >= 2) return true;
-            previous = current;
-          }
-          return false;
-        });
-        expect(settled, "wheel scrolling settled within 120 frames").toBe(true);
+        if (failures.length === 0) {
+          // Wheel dispatch is asynchronous: wait for movement or the page boundary.
+          phase = "wheel movement poll";
+          await expect
+            .poll(async () => {
+              const after = await position();
+              return after.y > before.y || after.atEnd;
+            })
+            .toBe(true);
+          // Movement alone is insufficient: sample only after two consecutive
+          // animation-frame intervals have unchanged scrollY, with a finite budget.
+          phase = "wheel settling";
+          const settled = await page.evaluate(async () => {
+            let previous = scrollY;
+            let stableFrames = 0;
+            for (let frame = 0; frame < 120; frame++) {
+              await new Promise<void>((resolve) =>
+                requestAnimationFrame(() => resolve())
+              );
+              const current = scrollY;
+              stableFrames = current === previous ? stableFrames + 1 : 0;
+              if (stableFrames >= 2) return true;
+              previous = current;
+            }
+            return false;
+          });
+          expect(settled, "wheel scrolling settled within 120 frames").toBe(
+            true
+          );
+        } else {
+          // No retry budget after a verdict failure: allow one pair of frames
+          // for wheel dispatch, then take cheap samples even if still moving.
+          phase = "diagnostic wheel frames";
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) =>
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() => resolve())
+                )
+              )
+          );
+        }
         await collectVisibleRows(step);
         phase = "page-end detection";
         const after = await position();
@@ -558,16 +578,18 @@ for (const height of [800, 600]) {
           break;
         }
       }
-      phase = "page-end assertion";
-      expect(stoppedAtEnd, "wheel scrolling stopped at the page end").toBe(
-        true
-      );
-      phase = "all-rows assertion";
-      expect([...seen].sort(), "every summary row was fully visible").toEqual([
-        0, 1, 2, 3, 4, 5, 6, 7,
-      ]);
-      phase = "final-row viewport assertion";
-      await expect(rows.last()).toBeInViewport({ ratio: 1 });
+      if (failures.length === 0) {
+        phase = "page-end assertion";
+        expect(stoppedAtEnd, "wheel scrolling stopped at the page end").toBe(
+          true
+        );
+        phase = "all-rows assertion";
+        expect([...seen].sort(), "every summary row was fully visible").toEqual(
+          [0, 1, 2, 3, 4, 5, 6, 7]
+        );
+        phase = "final-row viewport assertion";
+        await expect(rows.last()).toBeInViewport({ ratio: 1 });
+      }
       phase = "final evidence collection";
       const evidence = await aside.evaluate((element) => {
         const last = element
