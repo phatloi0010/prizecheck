@@ -361,8 +361,8 @@ for (const height of [800, 600]) {
     const collectRows = (step: number) =>
       rows.evaluateAll(
         async (elements, { step, earlier }) => {
-          // Capture the same intersection ratio checked by toBeInViewport, so
-          // assertions can be deferred until the entire wheel scroll is recorded.
+          // Record the ratio as diagnostic data; the live Playwright matcher
+          // below retains its own retries and numerical tolerance.
           const ratios = await new Promise<Map<Element, number>>((resolve) => {
             const values = new Map<Element, number>();
             const observer = new IntersectionObserver((entries) => {
@@ -462,13 +462,51 @@ for (const height of [800, 600]) {
         { step, earlier: [...seenUncovered] }
       );
     const samples: Awaited<ReturnType<typeof collectRows>> = [];
+    let lastAttemptedWheelStep = -1;
+    let phase = "initial collection";
+    const failures: {
+      error: unknown;
+      step: number;
+      phase: string;
+      rowIndex?: number;
+      ratio?: number;
+    }[] = [];
+    const rememberFailure = (
+      error: unknown,
+      sample?: (typeof samples)[number]
+    ) => {
+      failures.push({
+        error,
+        step: lastAttemptedWheelStep,
+        phase,
+        rowIndex: sample?.index,
+        ratio: sample?.ratio,
+      });
+    };
     const collectVisibleRows = async (step: number) => {
+      phase = "row collection";
       const current = await collectRows(step);
       samples.push(...current);
       for (const sample of current) {
         if (!sample.fullyVisible) continue;
         seen.add(sample.index);
         if (sample.uncovered) seenUncovered.add(sample.index);
+        // Preserve failures at this position, even if the row is readable later.
+        phase = "row occlusion assertion";
+        try {
+          expect(
+            sample.uncovered,
+            `summary row ${sample.index + 1} is uncovered: ${JSON.stringify(sample)}`
+          ).toBe(true);
+        } catch (error) {
+          rememberFailure(error, sample);
+        }
+        phase = "row viewport assertion";
+        try {
+          await expect(rows.nth(sample.index)).toBeInViewport({ ratio: 1 });
+        } catch (error) {
+          rememberFailure(error, sample);
+        }
       }
     };
     const position = () =>
@@ -477,87 +515,104 @@ for (const height of [800, 600]) {
         atEnd:
           scrollY + innerHeight >= document.documentElement.scrollHeight - 1,
       }));
-    await collectVisibleRows(-1);
-    let stoppedAtEnd = false;
-    for (let step = 0; step < 80; step++) {
-      const before = await position();
-      await page.mouse.wheel(0, 120);
-      // Wheel dispatch is asynchronous: wait for movement or the page boundary.
-      await expect
-        .poll(async () => {
-          const after = await position();
-          return after.y > before.y || after.atEnd;
-        })
-        .toBe(true);
-      // Movement alone is insufficient: sample only after two consecutive
-      // animation-frame intervals have unchanged scrollY, with a finite budget.
-      const settled = await page.evaluate(async () => {
-        let previous = scrollY;
-        let stableFrames = 0;
-        for (let frame = 0; frame < 120; frame++) {
-          await new Promise<void>((resolve) =>
-            requestAnimationFrame(() => resolve())
-          );
-          const current = scrollY;
-          stableFrames = current === previous ? stableFrames + 1 : 0;
-          if (stableFrames >= 2) return true;
-          previous = current;
+    try {
+      await collectVisibleRows(-1);
+      let stoppedAtEnd = false;
+      for (let step = 0; step < 80; step++) {
+        lastAttemptedWheelStep = step;
+        phase = "wheel position";
+        const before = await position();
+        phase = "wheel dispatch";
+        await page.mouse.wheel(0, 120);
+        // Wheel dispatch is asynchronous: wait for movement or the page boundary.
+        phase = "wheel movement poll";
+        await expect
+          .poll(async () => {
+            const after = await position();
+            return after.y > before.y || after.atEnd;
+          })
+          .toBe(true);
+        // Movement alone is insufficient: sample only after two consecutive
+        // animation-frame intervals have unchanged scrollY, with a finite budget.
+        phase = "wheel settling";
+        const settled = await page.evaluate(async () => {
+          let previous = scrollY;
+          let stableFrames = 0;
+          for (let frame = 0; frame < 120; frame++) {
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve())
+            );
+            const current = scrollY;
+            stableFrames = current === previous ? stableFrames + 1 : 0;
+            if (stableFrames >= 2) return true;
+            previous = current;
+          }
+          return false;
+        });
+        expect(settled, "wheel scrolling settled within 120 frames").toBe(true);
+        await collectVisibleRows(step);
+        phase = "page-end detection";
+        const after = await position();
+        if (after.y === before.y) {
+          stoppedAtEnd = after.atEnd;
+          break;
         }
-        return false;
+      }
+      phase = "page-end assertion";
+      expect(stoppedAtEnd, "wheel scrolling stopped at the page end").toBe(
+        true
+      );
+      phase = "all-rows assertion";
+      expect([...seen].sort(), "every summary row was fully visible").toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7,
+      ]);
+      phase = "final-row viewport assertion";
+      await expect(rows.last()).toBeInViewport({ ratio: 1 });
+      phase = "final evidence collection";
+      const evidence = await aside.evaluate((element) => {
+        const last = element
+          .querySelector("li:last-child")!
+          .getBoundingClientRect();
+        return {
+          panelHeight: element.getBoundingClientRect().height,
+          viewport: innerHeight,
+          finalRow: { top: last.top, bottom: last.bottom, height: last.height },
+        };
       });
-      expect(settled, "wheel scrolling settled within 120 frames").toBe(true);
-      await collectVisibleRows(step);
-      const after = await position();
-      if (after.y === before.y) {
-        stoppedAtEnd = after.atEnd;
-        break;
+      phase = "final evidence attachment";
+      await test.info().attach("reachability", {
+        body: JSON.stringify(evidence),
+        contentType: "application/json",
+      });
+    } catch (error) {
+      rememberFailure(error);
+    } finally {
+      // Persist partial evidence even when scrolling or collection fails. Keep
+      // the first failure ahead of later collection or attachment errors.
+      const diagnostics = {
+        lastAttemptedWheelStep,
+        phase,
+        samples,
+        failures: failures.map(({ error, ...context }) => ({
+          ...context,
+          message: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        })),
+        everUncoveredFullyVisible: Array.from({ length: 8 }, (_, index) => ({
+          index,
+          ever: seenUncovered.has(index),
+        })),
+      };
+      try {
+        await test.info().attach("reachability-diagnostics", {
+          body: JSON.stringify(diagnostics),
+          contentType: "application/json",
+        });
+      } catch (error) {
+        phase = "diagnostic attachment";
+        rememberFailure(error);
       }
     }
-    const diagnostics = {
-      samples,
-      everUncoveredFullyVisible: Array.from({ length: 8 }, (_, index) => ({
-        index,
-        ever: seenUncovered.has(index),
-      })),
-    };
-    await test.info().attach("reachability-diagnostics", {
-      body: JSON.stringify(diagnostics),
-      contentType: "application/json",
-    });
-    // Preserve every original sampled failure, even if that row becomes readable
-    // later. The complete scroll above is diagnostic evidence, not a new verdict.
-    for (const sample of samples) {
-      if (!sample.fullyVisible) continue;
-      expect(
-        sample.uncovered,
-        `summary row ${sample.index + 1} is uncovered: ${JSON.stringify({
-          ...sample,
-          everUncoveredFullyVisible: seenUncovered.has(sample.index),
-        })}`
-      ).toBe(true);
-      expect(
-        sample.ratio,
-        "fully visible summary row has viewport ratio 1"
-      ).toBe(1);
-    }
-    expect(stoppedAtEnd, "wheel scrolling stopped at the page end").toBe(true);
-    expect([...seen].sort(), "every summary row was fully visible").toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7,
-    ]);
-    await expect(rows.last()).toBeInViewport({ ratio: 1 });
-    const evidence = await aside.evaluate((element) => {
-      const last = element
-        .querySelector("li:last-child")!
-        .getBoundingClientRect();
-      return {
-        panelHeight: element.getBoundingClientRect().height,
-        viewport: innerHeight,
-        finalRow: { top: last.top, bottom: last.bottom, height: last.height },
-      };
-    });
-    await test.info().attach("reachability", {
-      body: JSON.stringify(evidence),
-      contentType: "application/json",
-    });
+    if (failures.length > 0) throw failures[0].error;
   });
 }
