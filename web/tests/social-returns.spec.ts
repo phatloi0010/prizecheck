@@ -89,10 +89,12 @@ test("a return started by either side moves on once the other side confirms, and
   await expectPageChecks(page, "a return to confirm on a phone");
   await page.getByRole("button", { name: "Yes, I gave them back" }).click();
   await expect(title(page)).toHaveText("Your Loan from Misty W ended");
+  await expect(page.getByRole("main")).toContainText("You borrowed");
   await expect(iono(page)).toContainText("3 returned");
   await page.setViewportSize(DESKTOP);
   await lender.reload();
   await expect(title(lender)).toHaveText("Your Loan to Ash K ended");
+  await expect(lender.getByRole("main")).toContainText("You lent");
 });
 
 test("a return the borrower started is his to finish once the lender's account is gone", async ({

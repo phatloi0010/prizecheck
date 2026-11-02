@@ -53,10 +53,12 @@ import {
   lineEdition,
   lineOut,
   loanHeadline,
+  loanRoleFact,
   loanStepMessage,
   LOANS_PATH,
   outcomeUnknown,
   today,
+  UNSORTED_DESTINATION_FACT,
   waitingText,
 } from "./loanText";
 
@@ -534,7 +536,7 @@ export function LoanScreen({
 
   const deck = side.deck;
   const facts: ReactNode[] = [
-    loan.role === "lender" ? "You're lending" : "You're borrowing",
+    loanRoleFact(loan),
     loan.role === "borrower" &&
     loan.state !== "closed" &&
     loan.state !== "offered" ? (
@@ -554,7 +556,7 @@ export function LoanScreen({
           </a>
         </>
       ) : (
-        "For Unsorted"
+        UNSORTED_DESTINATION_FACT
       )
     ) : null,
     loan.overdue_since
@@ -922,14 +924,16 @@ export function LoanScreen({
   return frame(
     loanHeadline(loan),
     <>
-      <p className="m-0 border-b border-border pb-4 text-meta text-text-muted tabular-nums">
-        {facts.map((fact, index) => (
-          <Fragment key={index}>
-            {index > 0 && " · "}
-            {fact}
-          </Fragment>
-        ))}
-      </p>
+      {facts.length > 0 && (
+        <p className="m-0 border-b border-border pb-4 text-meta text-text-muted tabular-nums">
+          {facts.map((fact, index) => (
+            <Fragment key={index}>
+              {index > 0 && " · "}
+              {fact}
+            </Fragment>
+          ))}
+        </p>
+      )}
       {(showing.includes("nudge_answer") ||
         showing.includes("nudge_handover")) && (
         <p role="status" className="m-0 text-body">

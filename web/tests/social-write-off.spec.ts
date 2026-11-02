@@ -103,7 +103,9 @@ test("the lender writes off copies, and the borrower keeps them or says they're 
   await expect(title(page)).toHaveText("Misty W wrote off 2 cards you have");
   await page.getByRole("button", { name: "They're gone" }).click();
   await expect(title(page)).toHaveText("Your Loan from Misty W ended");
+  await expect(page.getByRole("main")).toContainText("You borrowed");
   await expect(firstLine(page)).toContainText("2 written off");
   await lender.reload();
   await expect(title(lender)).toHaveText("Your Loan to Ash K ended");
+  await expect(lender.getByRole("main")).toContainText("You lent");
 });

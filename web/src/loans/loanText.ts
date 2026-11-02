@@ -120,6 +120,30 @@ export function loanHeadline(loan: LoanView): string {
 }
 
 /**
+ * The reader's role on the Loan screen's facts line (#499): present tense while the Loan is open, past tense when a
+ * handed-over Loan ended ("returned" or "written_off"), and omitted when a Loan closed before any handover ("declined",
+ * "withdrawn" or "cancelled").
+ */
+export function loanRoleFact(
+  loan: Pick<LoanView, "role" | "state" | "closed_reason">
+): string | null {
+  const lender = loan.role === "lender";
+  if (loan.state !== "closed") {
+    return lender ? "You're lending" : "You're borrowing";
+  }
+  if (
+    loan.closed_reason === "returned" ||
+    loan.closed_reason === "written_off"
+  ) {
+    return lender ? "You lent" : "You borrowed";
+  }
+  return null;
+}
+
+/** The borrower's destination fact when no Deck is set on an open Loan (#499). */
+export const UNSORTED_DESTINATION_FACT = "Goes to Unsorted";
+
+/**
  * A line's copies still out (#255): promised, less those written off (#257) and those back in complete returns. With no
  * return pending, both sides have this many out.
  */
