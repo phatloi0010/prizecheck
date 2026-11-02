@@ -6,6 +6,7 @@ import {
 } from "./settingsNavigation";
 import { PageHeader } from "../shell/PageHeader";
 import { SignInsSection } from "../shell/SignInsSection";
+import { PriceCredit } from "../ui/PriceCredit";
 import { BlockedSection } from "./BlockedSection";
 import { ForTradeLocationsSection } from "./ForTradeLocationsSection";
 import { HiddenLocationsSection } from "./HiddenLocationsSection";
@@ -69,6 +70,7 @@ export function SettingsPage({
           <OpenDiscoverySection />
           <SignInsSection active={active} email={email} />
         </main>
+        <PriceCredit />
       </FirstReadContext.Provider>
     </SettingsNavigationScope.Provider>
   );

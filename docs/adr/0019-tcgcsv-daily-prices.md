@@ -85,9 +85,9 @@ user-facing request, and a thank-you link is appreciated. The owner decided on 2
   - Owner controls shows each import's outcome, TCGCSV's update time, failures, coverage and fallback-art counts. It warns
     when the last good run, or TCGCSV's own update time, is over 48 hours old.
   - Collector screens show no time or refresh state ([AGENTS.md](../../AGENTS.md)).
-  - **Footer credit.** By the owner's explicit exception to AGENTS.md's no-provenance rule, the signed-in shell and the
-    public pages end with one footer line, "Prices from TCGCSV", linking tcgcsv.com. It is the only collector-visible
-    provenance this decision adds.
+  - **Footer credit.** By the owner's explicit exception to AGENTS.md's no-provenance rule, the Settings page ends with
+    one footer line, "Prices from TCGCSV", linking tcgcsv.com (#467). It is the only collector-visible provenance this
+    decision adds.
 - **Fix forward only.** No step restores TCGdex prices, and the earlier release is never redeployed for that. A broken
   release is handled by:
   - a `PRICE_READS=off` switch that hides every price without a code change;

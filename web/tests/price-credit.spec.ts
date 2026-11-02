@@ -1,13 +1,15 @@
-// Ticket P4b (#350): the "Prices from TCGCSV" footer credit. The owner's exception to AGENTS.md's no-provenance rule
-// (ADR 0019): one line at the end of the signed-in shell and of the public layout, none on the scanner page, no date or
-// time, and the only collector-visible mention of TCGCSV. TCGplayer is named elsewhere by the Published Deck page's
-// "Buy on TCGplayer" export, which this ticket leaves alone; the text scan below allows exactly that and nothing else.
+// Ticket P4b (#350, updated in #467): the "Prices from TCGCSV" footer credit. The owner's exception to AGENTS.md's
+// no-provenance rule (ADR 0019): one line at the foot of the Settings page only, none on other signed-in pages, the
+// scanner or public pages, no date or time, and the only collector-visible mention of TCGCSV. TCGplayer is named
+// elsewhere by the Published Deck page's "Buy on TCGplayer" export, which this ticket leaves alone; the text scan below
+// allows exactly that and nothing else.
 import { test, expect, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { signInAsOwner } from "./support/sign-in";
 import { startAsNewOwner } from "./support/owner";
+import { expectTouchTarget } from "./support/touch-target";
 
 const ORIGIN = process.env.TEST_ORIGIN || "http://localhost:5173";
 const CREDIT = "Prices from TCGCSV";
@@ -83,7 +85,7 @@ for (const viewport of [
   test.describe(`at ${viewport.width}×${viewport.height}`, () => {
     test.use({ viewport });
 
-    test("the Collection, catalog, Published Deck and sign-in pages each end with one credit and name no other source", async ({
+    test("the credit appears once at the foot of Settings and not on Collection, Decks, Loans, Trades, Catalog or public pages", async ({
       page,
     }) => {
       const token = publishedToken(`credit-owner-${randomUUID()}`);
@@ -91,50 +93,57 @@ for (const viewport of [
         route.fulfill({ status: 200, contentType: "image/png", body: PIXEL })
       );
 
-      // Signed out: the sign-in page and a Published Deck, in the public layout.
+      // Signed out: the sign-in page and a Published Deck show no credit (#467).
       await page.goto(`${ORIGIN}/sign-in`);
       await expect(
         page.getByRole("navigation", { name: "Public pages" })
       ).toBeVisible();
-      await expectOneCredit(page);
+      await expect(credit(page)).toHaveCount(0);
       expect(await otherSourceMentions(page)).toEqual([]);
 
       await page.goto(`${ORIGIN}/published/${token}`);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-      await expectOneCredit(page);
-      // It comes after the TCGdex not-endorsed note.
-      const note = page.getByText(/Not endorsed by Nintendo/);
-      await expect(note).toHaveCount(1);
-      const noteBox = (await note.boundingBox())!;
-      const creditBox = (await credit(page).boundingBox())!;
-      expect(creditBox.y).toBeGreaterThan(noteBox.y + noteBox.height - 1);
-      // The page's existing Buy on TCGplayer export is the only other mention, and TCGCSV is in none.
+      await expect(credit(page)).toHaveCount(0);
+      // The page's existing Buy on TCGplayer export is the only mention, and TCGCSV is in none.
       const published = await otherSourceMentions(page);
       expect(published.length).toBeGreaterThan(0);
       for (const line of published) expect(line).toMatch(/TCGplayer/);
       expect(published.join("\n")).not.toMatch(/TCGCSV/i);
 
-      // Signed in: Collection and the catalog, in the shell.
+      // Signed in: Collection, Decks, Loans, Trades and Catalog show no credit.
       await startSignedIn(page, "/collection");
       await expect(
         page.getByRole("navigation", { name: "Main views" })
       ).toBeVisible();
+      await expect(credit(page)).toHaveCount(0);
+      expect(await otherSourceMentions(page)).toEqual([]);
+
+      for (const path of ["/decks", "/loans", "/trades", "/catalog"]) {
+        await page.goto(`${ORIGIN}${path}`);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        await expect(credit(page)).toHaveCount(0);
+        expect(await otherSourceMentions(page)).toEqual([]);
+      }
+
+      // Settings shows the credit once at the foot of the page.
+      await page.goto(`${ORIGIN}/settings`);
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Settings" })
+      ).toBeVisible();
       await expectOneCredit(page);
       expect(await otherSourceMentions(page)).toEqual([]);
       if (viewport.width <= 760) {
-        // Scrolled to the end, the credit sits above the fixed tab bar.
+        // Scrolled to the end, the credit has a 44 px tap target and sits above the fixed tab bar.
         await credit(page).scrollIntoViewIfNeeded();
+        await expectTouchTarget(
+          credit(page).getByRole("link", { name: "TCGCSV" })
+        );
         const tabs = (await page
           .getByRole("navigation", { name: "Main views" })
           .boundingBox())!;
         const box = (await credit(page).boundingBox())!;
         expect(box.y + box.height).toBeLessThanOrEqual(tabs.y + 0.5);
       }
-
-      await page.goto(`${ORIGIN}/catalog`);
-      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-      await expectOneCredit(page);
-      expect(await otherSourceMentions(page)).toEqual([]);
     });
 
     test("the scanner page shows no credit", async ({ page }) => {
