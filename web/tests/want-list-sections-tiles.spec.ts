@@ -357,33 +357,118 @@ for (const height of [800, 600]) {
       Math.min(panelBox.y + 20, height - 1)
     );
     const seen = new Set<number>();
-    const checkVisibleRows = async () => {
-      for (let index = 0; index < 8; index++) {
-        const row = rows.nth(index);
-        const sample = await row.evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          const fullyVisible =
-            box.top >= 0 &&
-            box.bottom <= innerHeight &&
-            box.left >= 0 &&
-            box.right <= innerWidth;
-          const uncovered =
-            typeof document.elementFromPoint !== "function" ||
-            [box.top + box.height / 2, box.bottom - 1].every((y) => {
-              const hit = document.elementFromPoint(
-                box.left + box.width / 2,
-                y
-              );
-              return hit !== null && element.contains(hit);
+    const seenUncovered = new Set<number>();
+    const collectRows = (step: number) =>
+      rows.evaluateAll(
+        async (elements, { step, earlier }) => {
+          // Capture the same intersection ratio checked by toBeInViewport, so
+          // assertions can be deferred until the entire wheel scroll is recorded.
+          const ratios = await new Promise<Map<Element, number>>((resolve) => {
+            const values = new Map<Element, number>();
+            const observer = new IntersectionObserver((entries) => {
+              for (const entry of entries)
+                values.set(entry.target, entry.intersectionRatio);
+              if (values.size === elements.length) {
+                observer.disconnect();
+                resolve(values);
+              }
             });
-          return { fullyVisible, uncovered };
-        });
+            for (const element of elements) observer.observe(element);
+          });
+          const describe = (element: Element | null) => {
+            if (!element) return null;
+            const style = getComputedStyle(element);
+            return {
+              tagName: element.tagName,
+              id: element.id,
+              classList: [...element.classList],
+              role: element.getAttribute("role"),
+              ariaLabel: element.getAttribute("aria-label"),
+              dataAttributes: Object.fromEntries(
+                [...element.attributes]
+                  .filter((attribute) => attribute.name.startsWith("data-"))
+                  .map((attribute) => [attribute.name, attribute.value])
+              ),
+              rect: element.getBoundingClientRect().toJSON(),
+              position: style.position,
+              zIndex: style.zIndex,
+            };
+          };
+          return elements.map((element, index) => {
+            const box = element.getBoundingClientRect();
+            const fullyVisible =
+              box.top >= 0 &&
+              box.bottom <= innerHeight &&
+              box.left >= 0 &&
+              box.right <= innerWidth;
+            const points = [box.top + box.height / 2, box.bottom - 1].map(
+              (y) => {
+                const x = box.left + box.width / 2;
+                if (typeof document.elementFromPoint !== "function")
+                  return {
+                    x,
+                    y,
+                    uncovered: true,
+                    hit: null,
+                    closestAncestor: null,
+                  };
+                const hit = document.elementFromPoint(x, y);
+                let ancestor = hit?.parentElement ?? null;
+                while (
+                  ancestor &&
+                  !ancestor.matches(
+                    "header, main, nav, aside, footer, section[aria-label], section[aria-labelledby], form[aria-label], [role='banner'], [role='main'], [role='navigation'], [role='complementary'], [role='contentinfo'], [role='region'], [role='search']"
+                  ) &&
+                  ![...ancestor.attributes].some((attribute) =>
+                    attribute.name.startsWith("data-")
+                  )
+                )
+                  ancestor = ancestor.parentElement;
+                return {
+                  x,
+                  y,
+                  uncovered: hit !== null && element.contains(hit),
+                  hit: describe(hit),
+                  closestAncestor: describe(ancestor),
+                };
+              }
+            );
+            const panel = element.closest("aside")!;
+            const panelStyle = getComputedStyle(panel);
+            return {
+              index,
+              step,
+              fullyVisible,
+              ratio: ratios.get(element),
+              uncovered: points.every((point) => point.uncovered),
+              failingPoints: points.filter((point) => !point.uncovered),
+              rowRect: box.toJSON(),
+              aside: {
+                rect: panel.getBoundingClientRect().toJSON(),
+                position: panelStyle.position,
+                top: panelStyle.top,
+              },
+              // Shell.tsx: desktop sticky app header, distinct from phone headers.
+              appHeader: describe(
+                document.querySelector("[data-app-shell] > header.sticky")
+              ),
+              scrollY,
+              innerHeight,
+              scrollHeight: document.documentElement.scrollHeight,
+              seenUncoveredEarlier: earlier.includes(index),
+            };
+          });
+        },
+        { step, earlier: [...seenUncovered] }
+      );
+    const samples: Awaited<ReturnType<typeof collectRows>> = [];
+    const collectVisibleRows = async (step: number) => {
+      const current = await collectRows(step);
+      samples.push(...current);
+      for (const sample of current) {
         if (!sample.fullyVisible) continue;
-        expect(sample.uncovered, `summary row ${index + 1} is uncovered`).toBe(
-          true
-        );
-        await expect(row).toBeInViewport({ ratio: 1 });
-        seen.add(index);
+        seen.add(sample.index);
+        if (sample.uncovered) seenUncovered.add(sample.index);
       }
     };
     const position = () =>
@@ -392,7 +477,7 @@ for (const height of [800, 600]) {
         atEnd:
           scrollY + innerHeight >= document.documentElement.scrollHeight - 1,
       }));
-    await checkVisibleRows();
+    await collectVisibleRows(-1);
     let stoppedAtEnd = false;
     for (let step = 0; step < 80; step++) {
       const before = await position();
@@ -421,12 +506,39 @@ for (const height of [800, 600]) {
         return false;
       });
       expect(settled, "wheel scrolling settled within 120 frames").toBe(true);
-      await checkVisibleRows();
+      await collectVisibleRows(step);
       const after = await position();
       if (after.y === before.y) {
         stoppedAtEnd = after.atEnd;
         break;
       }
+    }
+    const diagnostics = {
+      samples,
+      everUncoveredFullyVisible: Array.from({ length: 8 }, (_, index) => ({
+        index,
+        ever: seenUncovered.has(index),
+      })),
+    };
+    await test.info().attach("reachability-diagnostics", {
+      body: JSON.stringify(diagnostics),
+      contentType: "application/json",
+    });
+    // Preserve every original sampled failure, even if that row becomes readable
+    // later. The complete scroll above is diagnostic evidence, not a new verdict.
+    for (const sample of samples) {
+      if (!sample.fullyVisible) continue;
+      expect(
+        sample.uncovered,
+        `summary row ${sample.index + 1} is uncovered: ${JSON.stringify({
+          ...sample,
+          everUncoveredFullyVisible: seenUncovered.has(sample.index),
+        })}`
+      ).toBe(true);
+      expect(
+        sample.ratio,
+        "fully visible summary row has viewport ratio 1"
+      ).toBe(1);
     }
     expect(stoppedAtEnd, "wheel scrolling stopped at the page end").toBe(true);
     expect([...seen].sort(), "every summary row was fully visible").toEqual([
