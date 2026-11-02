@@ -113,7 +113,7 @@ export function CopyTile({
         {borrowedFrom && (
           <span
             aria-hidden="true"
-            className="absolute bottom-1 left-1 max-w-[calc(100%-var(--space-2))] truncate rounded-round border-2 border-solid border-bg bg-surface-raised px-2 text-caption leading-5 text-text shadow-[0_1px_var(--space-1)_var(--color-shadow-strong)]"
+            className="absolute bottom-1 left-1 max-w-[calc(100%-var(--space-2))] truncate rounded-round border-2 border-solid border-bg bg-surface-raised px-2 text-caption leading-5 text-text shadow-[0_1px_var(--space-1)_var(--color-shadow-strong)] phone:line-clamp-2 phone:rounded-card phone:py-0.5 phone:leading-4 phone:whitespace-normal"
           >
             From {borrowedFrom}
           </span>

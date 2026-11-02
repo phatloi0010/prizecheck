@@ -497,10 +497,10 @@ export function Workspace({
     )?.focus();
   }, [focusAfter, index]);
 
-  const search = (
+  const search = (placeholder = "Search your cards…") => (
     <SearchField
       label="Search cards"
-      placeholder="Search your cards…"
+      placeholder={placeholder}
       autoComplete="off"
       maxLength={120}
       value={query}
@@ -614,7 +614,7 @@ export function Workspace({
           onClick={() => setDrawerOpen(true)}
         />
         <span className="sr-only">Collection</span>
-        <div className="mr-1 min-w-0 flex-1">{search}</div>
+        <div className="mr-1 min-w-0 flex-1">{search("Search")}</div>
         <FiltersDrawerButton
           ref={filtersOpener}
           filters={prefs.filters}
@@ -709,7 +709,7 @@ export function Workspace({
             data-no-marquee
             className="flex flex-wrap items-center gap-2 phone:hidden"
           >
-            <div className="max-w-105 min-w-0 flex-[1_1_180px]">{search}</div>
+            <div className="max-w-105 min-w-0 flex-[1_1_180px]">{search()}</div>
             <FiltersToggle
               filters={prefs.filters}
               open={filtersOpen}
